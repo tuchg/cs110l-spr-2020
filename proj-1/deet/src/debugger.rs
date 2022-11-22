@@ -1,5 +1,6 @@
+use nix::Error;
 use crate::debugger_command::DebuggerCommand;
-use crate::inferior::Inferior;
+use crate::inferior::{Inferior, Status};
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 
@@ -30,22 +31,59 @@ impl Debugger {
 
     pub fn run(&mut self) {
         loop {
-            match self.get_next_command() {
+           let next= match self.get_next_command() {
                 DebuggerCommand::Run(args) => {
-                    if let Some(inferior) = Inferior::new(&self.target, &args) {
+                    if let Some(inferior)=self.inferior.as_mut(){
+                        inferior.kill()
+                    }else if let Some(inferior) = Inferior::new(&self.target, &args) {
                         // Create the inferior
                         self.inferior = Some(inferior);
                         // You may use self.inferior.as_mut().unwrap() to get a mutable reference
                         // to the Inferior object
-                        self.inferior.as_mut().unwrap().continue_exec().unwrap();
+                        self.inferior.as_mut().unwrap().continue_exec()
                     } else {
-                        println!("Error starting subprocess");
+                        Err(Error::Sys(nix::errno::Errno::EIO))
                     }
                 }
+
+                DebuggerCommand::Continue => {
+                    if let Some(inferior)=self.inferior.as_mut(){
+                        inferior.continue_exec()
+                    }else{
+                        Err(Error::Sys(nix::errno::Errno::EIO))
+                    }
+                }
+
                 DebuggerCommand::Quit => {
-                    return;
+                    if let Some(inferior)=self.inferior.as_mut(){
+                        inferior.kill().expect("Kill failed");
+                        return;
+                    }else{
+                        Err(Error::Sys(nix::errno::Errno::EIO))
+                    }
+                }
+            };
+
+            match next{
+                Ok(status) => {
+                    match status {
+                        Status::Exited(_code) => {
+                            println!("Child exited (status {})", _code);
+                            self.inferior = None;
+                        },
+                        Status::Signaled(_signal) => {
+                            println!("Child signaled (signal {})", _signal);
+                            self.inferior = None;
+                        },
+                        Status::Stopped(_signal, _) => {
+                            println!("Child stopped (signal {})", _signal);                                    }
+                    }
+                },
+                Err(_) => {
+                    println!("Error starting subprocess");
                 }
             }
+
         }
     }
 
@@ -69,7 +107,7 @@ impl Debugger {
                     panic!("Unexpected I/O error: {:?}", err);
                 }
                 Ok(line) => {
-                    if line.trim().len() == 0 {
+                    if line.trim().is_empty() {
                         continue;
                     }
                     self.readline.add_history_entry(line.as_str());

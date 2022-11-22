@@ -56,9 +56,40 @@ impl Inferior {
     }
 
     /// resume the inferior from initial SIGTRAP
-    pub fn continue_exec(&self) -> Result<Status, Error> {
+    pub fn continue_exec(&mut self) -> Result<Status, Error> {
+        if !self.check_running() {
+            return Err(Error::Sys(nix::errno::Errno::EIO));
+        }
         ptrace::cont(self.pid(), None)?;
         self.wait(None)
+    }
+
+    pub fn kill(&mut self) -> Result<Status, Error> {
+        if !self.check_running() {
+            return Err(Error::Sys(nix::errno::Errno::EIO));
+        }
+
+        self.child.kill().unwrap();
+        println!("Killing running inferior (pid {})", self.pid());
+        self.wait(None)
+    }
+
+    fn check_running(&mut self)->bool {
+        if let Ok(running) = self.running() {
+            if !running {
+                println!("No running inferior");
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn running(&mut self) -> Result<bool, Error> {
+        Ok(match self.child.try_wait() {
+            Ok(Some(_)) => false,
+            Ok(None) => true,
+            Err(e) => panic!("unexpected running status: {:?}", e),
+        })
     }
 
     /// Returns the pid of this inferior.
@@ -68,7 +99,7 @@ impl Inferior {
 
     /// Calls waitpid on this inferior and returns a Status to indicate the state of the process
     /// after the waitpid call.
-    pub fn wait(&self, options: Option<WaitPidFlag>) -> Result<Status, nix::Error> {
+    pub fn wait(&self, options: Option<WaitPidFlag>) -> Result<Status, Error> {
         Ok(match waitpid(self.pid(), options)? {
             WaitStatus::Exited(_pid, exit_code) => Status::Exited(exit_code),
             WaitStatus::Signaled(_pid, signal, _core_dumped) => Status::Signaled(signal),
