@@ -5,6 +5,7 @@ use nix::unistd::Pid;
 use nix::Error;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command};
+use crate::dwarf_data::DwarfData;
 
 pub enum Status {
     /// Indicates inferior stopped. Contains the signal that stopped the process, as well as the
@@ -17,6 +18,8 @@ pub enum Status {
     /// Indicates the inferior exited due to a signal. Contains the signal that killed the
     /// process.
     Signaled(Signal),
+
+    None,
 }
 
 /// This function calls ptrace with PTRACE_TRACEME to enable debugging on a process. You should use
@@ -58,7 +61,7 @@ impl Inferior {
     /// resume the inferior from initial SIGTRAP
     pub fn continue_exec(&mut self) -> Result<Status, Error> {
         if !self.check_running() {
-            return Err(Error::Sys(nix::errno::Errno::EIO));
+            return Ok(Status::None);
         }
         ptrace::cont(self.pid(), None)?;
         self.wait(None)
@@ -66,7 +69,7 @@ impl Inferior {
 
     pub fn kill(&mut self) -> Result<Status, Error> {
         if !self.check_running() {
-            return Err(Error::Sys(nix::errno::Errno::EIO));
+            return Ok(Status::None);
         }
 
         self.child.kill().unwrap();
@@ -74,7 +77,7 @@ impl Inferior {
         self.wait(None)
     }
 
-    fn check_running(&mut self)->bool {
+    fn check_running(&mut self) -> bool {
         if let Ok(running) = self.running() {
             if !running {
                 println!("No running inferior");
@@ -90,6 +93,27 @@ impl Inferior {
             Ok(None) => true,
             Err(e) => panic!("unexpected running status: {:?}", e),
         })
+    }
+
+    pub fn print_backtrace(&mut self,debug_data:&DwarfData) -> Result<Status, nix::Error> {
+        if !self.check_running() {
+            return Ok(Status::None);
+        }
+        let regs = ptrace::getregs(self.pid()).expect("register read failed");
+        let mut instruction_ptr =regs.rip as usize;
+        let mut base_ptr =regs.rbp as usize;
+
+        loop {
+            let line=debug_data.get_line_from_addr(instruction_ptr).expect("get_line failed");
+            let function=debug_data.get_function_from_addr(instruction_ptr).expect("get_function failed");
+            println!("{} ({}:{})",function,line.file,line.number);
+            if function=="main" {
+                break
+            }
+            instruction_ptr=ptrace::read(self.pid(), (base_ptr+8) as ptrace::AddressType)? as usize;
+            base_ptr=ptrace::read(self.pid(),base_ptr as ptrace::AddressType)? as usize;
+        }
+        Ok(Status::None)
     }
 
     /// Returns the pid of this inferior.
