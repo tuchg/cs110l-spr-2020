@@ -97,6 +97,9 @@ impl Debugger {
                     }
                     Status::Stopped(_signal, _) => {
                         println!("Child stopped (signal {})", _signal);
+                        if let Some(inferior)=self.inferior.as_mut(){
+                            inferior.print_stopped_location(&self.debug_data).expect("stopped location failed");
+                        }
                     }
                     Status::None => {}
                 },

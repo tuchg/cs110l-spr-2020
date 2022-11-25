@@ -116,6 +116,13 @@ impl Inferior {
         Ok(Status::None)
     }
 
+    pub fn print_stopped_location(&mut self,debug_data:&DwarfData)->Result<Status,nix::Error>{
+        let regs = ptrace::getregs(self.pid()).expect("register read failed");
+        let line=debug_data.get_line_from_addr(regs.rip as usize).expect("get line failed");
+        println!("Stopped at {}:{}",line.file,line.number);
+        Ok(Status::None)
+    }
+
     /// Returns the pid of this inferior.
     pub fn pid(&self) -> Pid {
         Pid::from_raw(self.child.id() as i32)
